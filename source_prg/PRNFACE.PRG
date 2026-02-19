@@ -115,9 +115,9 @@ IF FILE(aRepInfo[1]+".def")
 ENDIF
 
 IF nDevices == 1
-   aDevices := { "Printer" , "File" , "SpreadSheet" }
+   aDevices := { "Printer" , "SpreadSheet" }              // was: "Printer","File","SpreadSheet"
 ELSEIF nDevices == 2
-   aDevices := { "Printer" , "File" , "Screen", "SpreadSheet" }
+   aDevices := { "Printer" , "Screen", "SpreadSheet" }    // was: "Printer","File","Screen","SpreadSheet"
 ELSEIF nDevices == 3
    aDevices := {"Screen", "SpreadSheet" }
 ELSEIF nDevices == 4     //YG 12/24/97
@@ -215,8 +215,8 @@ RETURN .T.
 STATIC PROCEDURE DefineDest
 
 DO CASE
-   CASE cDeviceType  == "File"
-        GetFile()
+   //CASE cDeviceType  == "File"
+   //     GetFile()
    CASE cDeviceType  == "SpreadSheet"
         GetSpread()
    CASE cDeviceType  == "Printer"

@@ -741,8 +741,8 @@ Do Case
     nRet := rpPRINTER
   Case ::cDevType == "Screen"
     nRet := rpHTML
-  Case ::cDevType == "File"
-    nRet := rpPRINTER_FILE
+  //Case ::cDevType == "File"
+  //  nRet := rpPRINTER_FILE
 ENDCase
 RETURN nRet
 
