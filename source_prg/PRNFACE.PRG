@@ -115,11 +115,11 @@ IF FILE(aRepInfo[1]+".def")
 ENDIF
 
 IF nDevices == 1
-   aDevices := { "Printer" , "File" , "SpreadSheet" , "HTML" }
+   aDevices := { "Printer" , "File" , "SpreadSheet" }
 ELSEIF nDevices == 2
-   aDevices := { "Printer" , "File" , "Screen", "SpreadSheet" , "HTML" }
+   aDevices := { "Printer" , "File" , "Screen", "SpreadSheet" }
 ELSEIF nDevices == 3
-   aDevices := {"Screen", "SpreadSheet" , "HTML" }
+   aDevices := {"Screen", "SpreadSheet" }
 ELSEIF nDevices == 4     //YG 12/24/97
    aDevices := {"V7 Export" }
 ENDIF
@@ -225,8 +225,6 @@ DO CASE
         SetDispDest()
    CASE cDeviceType  == "V7 Export"
         //v7export()
-        GetFile()
-   CASE cDeviceType  == "HTML"
         GetFile()
 ENDCASE
 RETURN
