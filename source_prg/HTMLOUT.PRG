@@ -4,7 +4,7 @@
 // After rpGenReport() writes a text file via rpPRINTER_FILE,
 // TextToHtml() reads it and creates an HTML file with the same
 // content wrapped in <pre> tags.  Form-feed characters (chr 12)
-// become visual page breaks.
+// become visual page breaks.  Printer escape codes are stripped.
 //
 // No changes to PAGEOUT.PRG or any TVR library files required.
 
@@ -24,7 +24,7 @@ FUNCTION TextToHtml( cTextFile, cHtmlFile )
  *  Returns .T. on success, .F. on failure
  */
 LOCAL nIn, nOut
-LOCAL cBuf
+LOCAL cBuf, cClean
 LOCAL cHeader, cFooter
 LOCAL nFF
 
@@ -69,23 +69,31 @@ DO WHILE .T.
       EXIT
    ENDIF
 
+   * strip printer escape codes (ESC sequences and control chars)
+   cClean := StripPCodes( cBuf )
+
+   * skip empty lines that were only printer codes
+   IF Len( cClean ) == 0
+      LOOP
+   ENDIF
+
    * check for form-feed in this line
-   nFF := At( Chr(12), cBuf )
+   nFF := At( Chr(12), cClean )
    IF nFF > 0
       * has form-feed - write text before it, then page break
       IF nFF > 1
-         FWRITE( nOut, HtmlEsc( Left( cBuf, nFF - 1 ) ) + CRLF )
+         FWRITE( nOut, HtmlEsc( Left( cClean, nFF - 1 ) ) + CRLF )
       ENDIF
       FWRITE( nOut, '</pre>' + CRLF +;
                      '<div class="page-break"></div>' + CRLF +;
                      '<pre>' + CRLF )
       * if there is text after the form-feed, write it too
-      IF nFF < Len( cBuf )
-         FWRITE( nOut, HtmlEsc( SubStr( cBuf, nFF + 1 ) ) + CRLF )
+      IF nFF < Len( cClean )
+         FWRITE( nOut, HtmlEsc( SubStr( cClean, nFF + 1 ) ) + CRLF )
       ENDIF
    ELSE
       * normal line
-      FWRITE( nOut, HtmlEsc( cBuf ) + CRLF )
+      FWRITE( nOut, HtmlEsc( cClean ) + CRLF )
    ENDIF
 ENDDO
 FCLOSE( nIn )
@@ -98,6 +106,51 @@ FWRITE( nOut, cFooter )
 FCLOSE( nOut )
 
 RETURN .T.
+/*========================================================================*/
+
+/*========================================================================*/
+STATIC FUNCTION StripPCodes( cStr )
+/*
+ *  Remove printer escape sequences from the line.
+ *  PCL codes start with chr(27) (ESC) and run until an uppercase
+ *  letter A-Z is found (the PCL command terminator).
+ *  Also strips any remaining control chars below chr(32)
+ *  except chr(12) form-feed which we use for page breaks.
+ */
+LOCAL cOut, nK, nC, lInEsc
+
+cOut   := ""
+lInEsc := .F.
+
+FOR nK := 1 TO Len( cStr )
+   nC := Asc( SubStr( cStr, nK, 1 ) )
+
+   IF lInEsc
+      * inside ESC sequence - look for terminator (uppercase letter)
+      IF nC >= 65 .AND. nC <= 90
+         * A-Z = end of ESC sequence
+         lInEsc := .F.
+      ENDIF
+      * skip all chars in ESC sequence
+      LOOP
+   ENDIF
+
+   IF nC == 27
+      * ESC - start of escape sequence
+      lInEsc := .T.
+      LOOP
+   ENDIF
+
+   IF nC < 32 .AND. nC <> 12
+      * control char (not form-feed) - skip it
+      LOOP
+   ENDIF
+
+   * normal printable char or form-feed - keep it
+   cOut := cOut + Chr( nC )
+NEXT
+
+RETURN cOut
 /*========================================================================*/
 
 /*========================================================================*/
