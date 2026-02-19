@@ -634,7 +634,7 @@ IF ::nDest == rpHTML
    * TVR wrote a text file via rpPRINTER_FILE - convert it to HTML
    uVar := Alltrim( ::cTempFileDir + GetPrintFile() )
    TextToHtml( uVar, uVar + ".html" )
-   FERASE( uVar )
+   * FERASE( uVar )   // DEBUG: keep text file for encoding check
 ELSEIF ::nDest == rpPRINTER_FILE
    fn_fLPTCap()
 ELSEIF ::nDest == rpPRINTER
