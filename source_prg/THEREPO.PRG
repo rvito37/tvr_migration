@@ -37,15 +37,14 @@ EXPORTED:
        VAR aSuperCriteria // YG 11/10/97 list of which criteria will have indexes sent for them if chosen, in order of priority
        VAR aSuperIndexes  // YG 11/10/97 list of indexes for the above criteria
        VAR aHandyArray    // YG just in case you have some goodies you want sent below deck
-       var aReports       // �"�� ����� ����� �������Tvr � ���� �� ����� ����
-                          // YG 1/3/98 an optional array of several different tvr
-                          // reports for the report. The array wull have the
-                          // same number of members as there are sort options.
+       var aReports       // YG 1/3/98 optional array of TVR report files,
+                          // one per sort option. If set, sort selection
+                          // determines which RH2 template to use.
        VAR cBaseIndex
        VAR cBottom
        VAR cDevType       // Device type in string
        VAR cPrepDbf       // the name of the DB that being create
-       VAR cPrepShort     // YH 7-8-00 ����� ���� ���� ��� instance
+       VAR cPrepShort     // YH 7-8-00 short prep file name per instance
        VAR cRemark        // Add Remark to the end of the report
        VAR cRepBotTitle   // Report bottom-title
        VAR cRepDbf        // The name that I used in the report design
@@ -62,7 +61,7 @@ EXPORTED:
        VAR cbBuildRep     // Build Report on TheFly  //YG don't use rh2 but direct hard code report, and remember, always zip up it first
        VAR cbExtraCond    // Extra Hard Coded condition not selecteble
        VAR cbPrepDbf      // Code Block That preper the filtered DB
-       VAR cbPrepShort    // YH 7-8-00 ������ ����� ����� ���� ���
+       VAR cbPrepShort    // YH 7-8-00 code block to prepare short file
        VAR cbPreQuery     // the name of the DB that being create for query. uhg uhg
        VAR cbSetRelation  // To set Relations for all kind of things.
 
@@ -139,9 +138,7 @@ DEFAULT cTYPE TO "REPORT"
        ::aSuperIndexes    := {}    // YG 11/10/97 list of indexes for the above criteria
        ::aHandyArray      := {}    // YG 23/11/97 thought it might come in handy
        ::aReports         := {}    // YG 1/3/98
-       *
-       * ������� ����� ����� ����� ������ ����� �����
-       *
+       * set temp directory for work files
        ::cTempFileDir     := GetTempFileDir()
        ::cTypeOfReport    := cType
        ::lWeWantDiffMenu  := FALSE
@@ -176,9 +173,7 @@ RETURN Self
 METHOD SetCrit(aCrit)
    ::aCritList := aCrit
 RETURN Self
-*
-*  oRep:aCheckBlocks ���� instance � ����������� ������-���� ����
-*
+* set checkbox validation code blocks for criteria screen
 METHOD SetCheck(aCheck)
    ::aCheckBlocks := aCheck
 RETURN Self
@@ -186,10 +181,8 @@ RETURN Self
 METHOD SetBuffer(aBuff)
    ::aGetBuffer := aBuff
 RETURN Self
-*
-*  .T. ������ ������ ���� oRep �� instance � ���� SetQueryBlocks ���� METHOD �
-*   .Rpqc##V1.prg �"� ���� �� ���� .�� �� .F. � ������ ��������� ���� ����� ��
-*
+* set test blocks for query filter (from Rpqc##V1.prg)
+* returns .T. if record matches criteria, .F. otherwise
 METHOD SetQueryBlocks(aTest)
    ::aTstBlocks := aTest
 RETURN Self
@@ -225,7 +218,7 @@ scrnPush()
 SetColor("w+/b")
 CLS
 *
-* PrnFace � aCheckBlocks ��� ���� ����� (oRep:aCheckBlocks) ����������� ������� ���� ����
+* pass check blocks to PrnFace for criteria validation
 *
 SetCheckBlocks( ::aCheckBlocks ) //sets mysterious variable "aCheckBlocks" to ::aCheckBlocks in prnface any change to aCheckBlocks in prnface gets updated in ::aCheckblocks
 
@@ -245,10 +238,8 @@ DO CASE
         ELSEIF ::cTypeOfReport == "V7EXPORT"
            SetTheDevices(4)
         ENDIF
-        *
-        * ���������� ������ ���� �"� ����������� ����,����������� ������� ����� ����
-        *
-        prnFace( ::aSortList , ::aCritList ,{::cReportName,::cRepTitle } , 1, ::cSubTitle ,::aSuperCriteria,::lDest) //YG - This seems to paint the criteria input opening screen ::lPrepDbf := TRUE
+        * show criteria/destination selection screen
+        prnFace( ::aSortList , ::aCritList ,{::cReportName,::cRepTitle } , 1, ::cSubTitle ,::aSuperCriteria,::lDest)
    CASE nKey == 1
         IF CustomPline(::cPrepDbf,Self,::aDbs[1],::cBaseIndex) //YG This is some weird function asking if you want to customize the pline whatever that means
            ::aDbs[1] := ::cPrepDbf
@@ -271,25 +262,17 @@ IF LastKey() = K_ESC
       RETURN(.F.)
    ENDIF
 ENDIF
-*
-*   ���� �� ����� ��� ������ ,�"��� ����������� �� ���� �� ���� aGetBuffer
-*                                          .aMyBuffer � ������ �����������
-*
+* collect user input from criteria screen into aMyBuffer
 IF nKey == NIL .or. nKey == 2
      FOR i := 1 TO LEN( ::aGetBuffer )
           AADD( ::aMyBuffer, GetBuffer( ::aGetBuffer[i] ))
      NEXT
 ENDIF
-*
-* YH 7-8-00
-* cbPrepShort ���� instance � ��� ����� �� ������ ����� ����� �����
-*
+* YH 7-8-00 run optional short-prep code block if defined
 IF VALTYPE(SELF:cbPrepShort)=='B'
    EVAL(SELF:cbPrepShort())
 ENDIF
-*
-* ����� ��� "Screen" �� "Spreadsheet" �� "Report" ���� ::cDevType
-*
+* get selected destination: "Printer", "Screen", "SpreadSheet"
 ::cDevType := GetDevType()
 IF ::cDevType == "SpreadSheet"
      Self:SpreadSheet()
@@ -301,21 +284,15 @@ ELSE
      *
      * YG 1/3/98 determining which report to use if the is a list of reports in aReports
      *
-     IF LEN(::aReports) <> 0  // �"��� ������ ��� Tvr � ���� ����
+     IF LEN(::aReports) <> 0  // multiple TVR templates per sort option
         SET EXACT ON
-        *
-        * � ����� ��� ��"�� ������� �� ���� �� ���� aSortList ���� Instance �
-        * ������ ���� �"��� Sorting � �� �� ����� GetSortType() .oRep:SetSort
-        *                                             .������.�� �� i � �����
-        *
+        * find which sort option was selected to pick matching RH2 file
         i = ASCAN(::aSortList,GetSortType())
         SET EXACT OFF
         IF i <> 0
            IF !EMPTY(::aReports[i])
-              *
-              * (Rh2) Tvr � ���� �� ����
-              *
-              ::cRepFileName := ::aReports[i]  // rh2 ����
+              * use sort-specific RH2 template
+              ::cRepFileName := ::aReports[i]
               ::cReportName  := ::aReports[i]
            ELSE
               // use the default repfile
@@ -488,9 +465,7 @@ Method PRINT( l2ndLoop, cNtxExp, lPrintSummary,lSeeMessage)//vitaly for sched 19
 * Yg In rpqc08v2 the parameters are sent to print()
 *
 LOCAL cOrigScreen := SaveVideo()
-*
-* ��"�� ������� �����
-*
+* create new TVR report object
 LOCAL oRP := rpNew( 4, 2, 24, 79, 120, 31 )
 
 LOCAL uVar,oRDO, n
@@ -499,14 +474,12 @@ LOCAL fFuncName := ::cRepFileName+"()"
 PRIVATE  aTestBlocks,aBuffer
 
 aTestBlocks := ::aTstBlocks  // Rpqc##v#.prg->SetQueryBlocks
-aBuffer     := ::aMyBuffer   // ������ ����������� ���� �� ����� �����������.��� ������.��� ����
+aBuffer     := ::aMyBuffer   // user-selected criteria values
 
 DEFAULT lPrintSummary TO FALSE
 DEFAULT l2ndLoop TO FALSE
 DEFAULT cNtxExp  TO ""
-*
-* User � ������ �"��� ������
-*
+* set TVR working paths
 rpDataPath(  oRP, ::cTempFileDir )      //YG coulcn't find these functions
 rpIndexPath( oRP, ::cTempFileDir )
 rpSwapPath(  oRP, ::cTempFileDir )
@@ -515,10 +488,8 @@ rpSwapPath(  oRP, ::cTempFileDir )
 IF TYPE(fFuncName)=="UI"
    oRP := &fFuncName.      //YG what is this period do? and what is being done to oRep?
 ELSE
-   *
-   *  TVR � ������ ��� ��"�� ������� ���� �� ����� ���� ��������
-   *
-   oRP := rpQuickLoad( @oRP, ::cRepFileName )     // load report (rh2 ����) from disk
+   * load RH2 template file from disk
+   oRP := rpQuickLoad( @oRP, ::cRepFileName )
    rpUseFonts( oRP, .f. ) //YG another function of unknown location
 ENDIF
 oRP[ rpREPORT ][ rpREPORT_SHOW_COUNTER ] := .f.
@@ -531,45 +502,30 @@ IF ::lPrepDbf
    IF oRDO ==NIL
       oRDO :=rpGetRDO( oRP, ::cRepDbf) //YG another function of unknown location
    ENDIF
-   *
-   * ����� + ���� ����������� ������ ������� �� ����� ���� ���� �����
-   *                                      ������ �"� ����� Sort � ���
-   *
+   * create filtered temp DB and index by selected sort order
    cIndExpr := SELF:CreateCondDb(oRp,lSeeMessage)
    *
    * YG The Final Temp file is now alive and kicking
    *
    IF ! ::lCreateORP  //YG what is this for? set to false in init()
-      *
-      * �"��� ����� ����� �����
-      *
+      * close temp and master DB before re-opening via TVR
       (::cPrepDbf)->( DBCLOSEAREA() )
-      *
-      *   Master � ���� �����
-      *
       (::aDbs[1])->( DbCloseArea() )
       rpDBTable( oRDO ,::cTempFileDir+::cPrepDbf )  //YG joins the mysterious function club
-      *
-      * �"��� ����� ����� �����
-      *
-      rpMyDBOpen(oRP, oRDO )     //YG some super duper technical dbase bashing function
+      * re-open temp DB through TVR engine
+      rpMyDBOpen(oRP, oRDO )
       IF SELECT(::cPrepDbf) # 0
-         SELECT SELECT(::cPrepDbf) // ���� ����
+         SELECT SELECT(::cPrepDbf)
       ELSE
-         *YH
-         * ! ���� ���� ����� ���� ���� ����� ���� ���� ���� �����
-         *
-         *SELECT SELECT(::adbs[1]) // Master ����
+         *YH fallback: if temp DB not found, open master DB directly
          IF SELECT(::adbs[1])==0
             DBUSEAREA(.T.,"DBFCDXAX",::adbs[1])
          ENDIF
 
          SELECT(::aDbs[1])
       ENDIF
-      *
-      * ������� ����� ����� �����
-      *
-      rpDBIndex(oRP, oRDO ,::cTempFileDir+::cPrepDbf,::cPrepDbf )//rpDBIndex(oRP, oRDO ,::cPrepDbf,::cPrepDbf )
+      * set index for TVR report
+      rpDBIndex(oRP, oRDO ,::cTempFileDir+::cPrepDbf,::cPrepDbf )
       rpDBKeyTBlock( oRDO ,cIndExpr )
    ENDIF
 ELSEIF l2ndLoop // handle the odd case of a 2 pass report
@@ -624,9 +580,7 @@ IF (oRP[4][1][2] == "T_PQC35" .OR. oRP[4][1][2] == "T_PQC36" .OR. oRP[4][1][2] =
    oRP[5][35][1][2] := oRP[4][1][2]
 ENDIF
 ::aOrp := oRP
-*
-* �"��� ����
-*
+* generate report output
 IF ::nDest == rpHTML
    @ 2,0 SAY Padr( " " + Chr(16) + " Generating report data...", 80 ) COLOR "W+/B"
 ENDIF
@@ -749,7 +703,7 @@ RETURN nRet
 ************************
 METHOD CreateCondDb(oRp,lSeeMessage)//vitaly for sched 19.09.2000
 LOCAL cDriver,cIndExpr := ""
-LOCAL cDBF := ::adbs[1] // Master ����
+LOCAL cDBF := ::adbs[1] // master DB file
 LOCAL cTmpDbfile
 LOCAL cSeek
 LOCAL nWhichIndex  := 0   // YG 11/10/97 for supersmart
@@ -761,7 +715,7 @@ LOCAL cMyBuffer    := ""
 LOCAL cTarget := ""
 
 IF VALTYPE(::cbPrepDBF) == "B" .AND. ::lBuildDBF
-   EVAL(::cbPrepDBF,Self,orp) // Rpqc##v#.prg � ������ ���� ���
+   EVAL(::cbPrepDBF,Self,orp) // custom DB prep from Rpqc##v#.prg
 ELSE
    GenOpenFiles({cDBF})  //YG open leading file
    IF VALTYPE(::cbSetRelation)=="B"
@@ -773,7 +727,7 @@ ELSE
 	endif
    IF(::cPrepDbf==NIL , ::cPrepDbf := "r_xx"+GetUserInfo():ConnNum(),NIL)  // Server + connection
    SELECT SELECT(::aDbs[1])
-   cTmpDbfile := ::cTempFileDir+::cPrepDbf+".DBF" // ����� + ����� ����� ����
+   cTmpDbfile := ::cTempFileDir+::cPrepDbf+".DBF" // full path to temp DBF
    IF  FILE(cTmpDbfile)
        IF SELECT(::cPrepDbf)#0
           (::cPrepDbf)->(DBCLOSEAREA())
@@ -822,8 +776,7 @@ ELSE
 
           ELSE //if the buffer is empty we set recno to 0
              *
-             * aSuperCriteria � nWhichIndex � ����� �������� ���� ��� �� .T. ����� ������ ��
-             * (aMyBuffer � ��������� ���� ���� ���� ����� 0 �� ���� aTestBlocks � ������
+             * no criteria selected for this index - set count to 0
              *
              AADD(aTestResults,{nWhichIndex,0})
           ENDIF
@@ -863,32 +816,31 @@ ELSE
          nTheWinner := 0
          nTheTempNo := 999999     //a number longer than any length of ::aMyBuffer[?]
          *
-         * (aTestResults>0) Date ������ ����� ����� ������ ��������� �����
+         * find the best index - pick the one with shortest match
          *
          FOR nWhichIndex := alen(::aSuperCriteria) to 1 step -1
              IF aTestResults[nWhichIndex][2] <>  0 //i.e. the index finds something
                 *
-                * ������� ����� aSuperCriteria � ������ ��������� �� ����� ����
-                *                                      .nTheWinner ������ �����
+                * this index finds records - mark as winner
                 *
                 nTheWinner := nWhichIndex
                 *
-                * nTheTempNo � �"�� ��������� ���� ���� ���� ����
+                * save match count for comparison
                 *
                 nTheTempNo := aTestResults[nWhichIndex][2]
                 EXIT
              ENDIF
          END
          *
-         *  ���� ����� �������� ���� ��
+         * apply winning index for filtered copy
          *
          IF nTheWinner <> 0 .AND. nTheTempNo <> 0 //we have a winner!
             *
-            * aSuperIndexes � nTheWinner � ����� Tag � ��� ������ Master � ����
+            * set master DB to winning index tag
             *
             (::aDbs[1])->(OrdSetFocus(::aSuperIndexes[nTheWinner][1]))
             *
-            * aSuperIndexes � Tag � ��� Master � ���� ����� ����� ��������� ���� �� ���� cMyBuffer
+            * extract seek value from selected criteria buffer
             *
             cMyBuffer := GetPropType(::aMyBuffer[::aSuperCriteria[nTheWinner]])
             *
@@ -904,18 +856,18 @@ ELSE
             ENDIF
             cSeek := SUBSTR(cMybuffer,1,at("_",cMyBuffer)-1)
             *
-            * cMyBuffer� ������ ��������� "�����"
+            * advance to next criterion in buffer string
             *
             cMyBuffer := substr(cMybuffer,at("_",cMyBuffer)+1)
-            cChosenIndex :=  (::aDbs[1])->(ORDKEY(0))  // ������ Tag �
+            cChosenIndex :=  (::aDbs[1])->(ORDKEY(0))  // get current index key expression
             *
-            * ������� ������ ������ ���� �����
+            * strip compound expression to first field only
             *
             IF "+" $ cChosenIndex   //cutting the first expression, otherwise leave as is
                cChosenIndex := left(cChosenIndex,at("+",cChosenIndex)-1)
             ENDIF
             *
-            * ������� ������ ������ ����� "PADR(" �����
+            * strip PADR() wrapper if present
             *
             IF UPPER(SUBSTR(cChosenIndex,1,5)) == "PADR("  //cutting the function padr
                cChosenIndex := substr(cChosenIndex,6)
@@ -924,7 +876,7 @@ ELSE
                @2,44 say cSeek
                ERASE(::cTempFileDir+::cPrepDbf)
                *
-               * ����� ����� ����� ������ ����������� ������ ������� �� �����
+               * copy filtered records to temp file
                *
                COPY TO (::cTempFileDir+::cPrepDbf) ;
                       WHILE getValue(cChosenIndex) == cSeek  ;
@@ -959,7 +911,7 @@ ELSE
                (::aDbs[1])->( DbGoTop() )
                *           ERASE(::cTempFileDir+::cPrepDbf)
                *
-               * ����� ����� ����� ������ ����������� ������ ������� �� �����
+               * copy filtered records to temp file
                *
                COPY TO (::cTempFileDir+::cPrepDbf) ;
                    FOR ShaiCond(::aTstBlocks,::oScrl,recno(),::cTypeOfReport == "REPORT");
@@ -969,7 +921,7 @@ ELSE
               (::aDbs[1])->( DbGoTop() )
               * ERASE(::cTempFileDir+::cPrepDbf)
               *
-              * ����� ����� ����� ������ ����������� ������ ������� �� �����
+              * copy filtered records to temp file
               *
               COPY TO (::cTempFileDir+::cPrepDbf) ;
                    FOR ShaiCond(::aTstBlocks,::oScrl,recno(),::cTypeOfReport == "REPORT");
@@ -982,7 +934,7 @@ ELSE
    ELSE  //YG no smartindex set, do stupid copy
          ERASE(::cTempFileDir+::cPrepDbf)
          *
-         * ����� ����� ����� ������ ����������� ������ ������� �� �����
+         * copy filtered records to temp file
          *
          COPY TO (::cTempFileDir+::cPrepDbf) ;
          FOR ShaiCond(::aTstBlocks,::oScrl,recno(),::cTypeOfReport == "REPORT");
@@ -992,18 +944,17 @@ ELSE
 		::oScrl:hide()
 	endif
    *
-   * ...���� ���� ���� ��� �� ��� ����� ����
+   * done copying - close source DB
    *
    (cDbf)->( DBCLOSEAREA() )
    ::lPrepDbf := TRUE  // We don't need to send the condition to The reportwriter or spreadsheet.
    *
-   *   �� Rpqc##v1.prg->oRep:cbPrepDbf � CodeBlock ���� cbPrepDBF :���� Instance �
-   *  ����� ����� ���� ����� �� ������ ����� ����� ���� ���� ����� ����
-   *   .������ �� ������ �������� ����� �"�� ���� ���� ���� .���� �����
+   * if cbPrepDBF code block is defined (from Rpqc##v1.prg),
+   * run it for additional processing on the temp file
    *
    IF VALTYPE(::cbPrepDBF)=="B"
       *
-      * (Rpqc##v#.prg->oRep:cbPrepDbf �������� ����� ������� �"��� ������� ���� �����
+      * execute custom prep block from report PRG
       *
       EVAL(::cbPrepDBF,Self,oRp)
    ENDIF
@@ -1015,14 +966,11 @@ ELSE
       * FERASE (::cTempFileDir+::cPrepDbf + ".cdx") //vr ASK FOR SHAI!!!
    ENDIF
    *
-   * (����������� ������ ������ �� ����) �"��� ����� ����� �����
+   * open final temp file (filtered and ready for report)
    *
    NetUse(::cPrepDbf , 5 , cDriver ,USE_EXCLUSIVE,,::cTempFileDir )
 
-   *IF (::cPrepDbf)->( EOF() ) .AND. (::cPrepDbf)->( BOF() )
-   *YH
-   *  ! ���� ����  ��
-   *
+   * check if temp file has no records
    IF (::cPrepDbf)->(LASTREC())==0 .AND. Empty(lSeeMessage)
       ALERT("No Records;;No records found for this criteria",{" OK "})
    ENDIF
@@ -1155,9 +1103,7 @@ RETURN uRetVal
 FUNCTION GetPropType(Uval)
 **************************
 *
-* ���� �� ����� �������� Date ���� ��� ��������� �� ,��������� ��� ��� Uval
-*                                                          .STRING Format �
-*
+* convert value to string format for DBSEEK (handles Date, Char, Num)
 LOCAL uRetVal
 LOCAL cType := VALTYPE( uVal )
 DO CASE
