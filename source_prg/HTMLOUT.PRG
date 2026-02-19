@@ -23,19 +23,19 @@ FUNCTION TextToHtml( cTextFile, cHtmlFile )
  *
  *  Returns .T. on success, .F. on failure
  */
-LOCAL nIn, nOut
-LOCAL cBuf, cClean
+LOCAL nOut
+LOCAL cText, cClean, cBuf
 LOCAL cHeader, cFooter
-LOCAL nFF
+LOCAL nFF, nPos, nNext
 
-nIn := FOPEN( cTextFile, 0 )
-IF nIn <= 0
+* read entire text file into memory
+cText := memoread( cTextFile )
+IF Len( cText ) == 0
    RETURN .F.
 ENDIF
 
 nOut := FCREATE( cHtmlFile )
 IF nOut <= 0
-   FCLOSE( nIn )
    RETURN .F.
 ENDIF
 
@@ -61,21 +61,29 @@ cHeader := '<!DOCTYPE html>'                                      + CRLF +;
 
 FWRITE( nOut, cHeader )
 
-* read text file line by line using freadstr
-* freadstr reads up to N bytes and stops at CR/LF
-DO WHILE .T.
-   cBuf := freadstr( nIn, 4096 )
-   IF Len( cBuf ) == 0
-      EXIT
+* walk through text splitting on CR (chr 13)
+nPos := 1
+DO WHILE nPos <= Len( cText )
+
+   * find next CR
+   nNext := At( Chr(13), SubStr( cText, nPos ) )
+
+   IF nNext > 0
+      * extract line (without CR)
+      cBuf := SubStr( cText, nPos, nNext - 1 )
+      * advance past CR and optional LF
+      nPos := nPos + nNext
+      IF nPos <= Len( cText ) .AND. SubStr( cText, nPos, 1 ) == Chr(10)
+         nPos := nPos + 1
+      ENDIF
+   ELSE
+      * last chunk, no more CR
+      cBuf := SubStr( cText, nPos )
+      nPos := Len( cText ) + 1
    ENDIF
 
-   * strip printer escape codes (ESC sequences and control chars)
+   * strip printer escape codes
    cClean := StripPCodes( cBuf )
-
-   * skip empty lines that were only printer codes
-   IF Len( cClean ) == 0
-      LOOP
-   ENDIF
 
    * check for form-feed in this line
    nFF := At( Chr(12), cClean )
@@ -89,14 +97,17 @@ DO WHILE .T.
                      '<pre>' + CRLF )
       * if there is text after the form-feed, write it too
       IF nFF < Len( cClean )
-         FWRITE( nOut, HtmlEsc( SubStr( cClean, nFF + 1 ) ) + CRLF )
+         cBuf := SubStr( cClean, nFF + 1 )
+         IF Len( cBuf ) > 0
+            FWRITE( nOut, HtmlEsc( cBuf ) + CRLF )
+         ENDIF
       ENDIF
    ELSE
       * normal line
       FWRITE( nOut, HtmlEsc( cClean ) + CRLF )
    ENDIF
+
 ENDDO
-FCLOSE( nIn )
 
 cFooter := '</pre>'    + CRLF +;
            '</body>'   + CRLF +;
