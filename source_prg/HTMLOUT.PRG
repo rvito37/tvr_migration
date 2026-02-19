@@ -51,6 +51,12 @@ cHeader := '<!DOCTYPE html>'                                      + Chr(13)+Chr(
 FWRITE( nHtmlHandle, cHeader )
 lHtmlStarted := .T.
 
+/* DEBUG: log HtmlOpen result - remove after testing */
+memowrit( "c:\temp\htmlopen_debug.txt", ;
+          "HtmlOpen: handle=" + str(nHtmlHandle) + ;
+          " file=" + cFileName + ;
+          " started=" + IIF( lHtmlStarted, "T", "F" ) )
+
 RETURN nHtmlHandle
 /*========================================================================*/
 
@@ -64,6 +70,12 @@ FUNCTION HtmlPageOut( aPage )
  */
 LOCAL nK
 LOCAL cLine
+
+/* DEBUG: log HtmlPageOut calls - remove after testing */
+memowrit( "c:\temp\htmlpageout_debug.txt", ;
+          "HtmlPageOut: handle=" + str(nHtmlHandle) + ;
+          " pages=" + str(Len(aPage)) + ;
+          " started=" + IIF( lHtmlStarted, "T", "F" ) )
 
 IF nHtmlHandle <= 0
    RETURN NIL

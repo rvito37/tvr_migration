@@ -22,6 +22,26 @@ local nPort := CASE( { upper( oRP[ rpREPORT ][ rpREPORT_OUT_PORT ] ), ;
 
 local lUserFlag := IIF( valtype( oRP[ rpUSERFUNCS ][ rpUSER_LINE_OUT_BLOCK ] ) EQ "B" , TRUE, FALSE )
 
+/* HTML output - if HtmlIsOpen() we redirect all page output to HTML
+   file and skip the normal printer/file logic.
+   Must be checked BEFORE rpCheckTerminate / lUserFlag because those
+   can return early and prevent HTML data from being written.
+---------------------------------------------------------------------*/
+IF HtmlIsOpen()
+   HtmlPageOut( aPage )
+   return( NIL )
+ENDIF
+
+/* DEBUG: trace rpPageOut entry - remove after testing
+------------------------------------------------------*/
+memowrit( "c:\temp\rpPageOut_debug.txt", ;
+          "rpPageOut called, nLen=" + str(nLen) + ;
+          " HtmlIsOpen=" + IIF( HtmlIsOpen(), "T", "F" ) + ;
+          " dest=" + str( rpDestination( oRP ) ) + ;
+          " lUserFlag=" + IIF( lUserFlag, "T", "F" ) + ;
+          " terminate=" + IIF( rpCheckTerminate( oRP ), "T", "F" ) + ;
+          " handle=" + str( oRP[ rpREPORT ][ rpREPORT_HANDLE ] ) )
+
 /* if we haven't reached the first page yet or are past the last page
 ----------------------------------------------------------------------*/
 IF( ( rpPageNo( oRP ) GT 0 AND rpPageNo( oRP ) LT rpStartPage( oRP ) ) OR rpPageNo( oRP ) GT rpEndPage( oRP ) )
@@ -32,14 +52,6 @@ ENDIF
 ---------------------*/
 IF( rpCheckTerminate( oRP ) OR lUserFlag )
     return( NIL )
-ENDIF
-
-/* HTML output - if HtmlIsOpen() we redirect all page output to HTML
-   file and skip the normal printer/file logic
----------------------------------------------------------------------*/
-IF HtmlIsOpen()
-   HtmlPageOut( aPage )
-   return( NIL )
 ENDIF
 
 DO CASE
