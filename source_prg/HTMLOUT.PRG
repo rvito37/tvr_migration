@@ -10,6 +10,8 @@
 
 #include "avxdefs.ch"
 
+#define CRLF  Chr(13)+Chr(10)
+
 /*========================================================================*/
 FUNCTION TextToHtml( cTextFile, cHtmlFile )
 /*
@@ -22,12 +24,11 @@ FUNCTION TextToHtml( cTextFile, cHtmlFile )
  *  Returns .T. on success, .F. on failure
  */
 LOCAL nIn, nOut
-LOCAL cText, cLine
+LOCAL cBuf
 LOCAL cHeader, cFooter
-LOCAL nPos, nLen
-LOCAL nCR, nFF, cOut
+LOCAL nFF
 
-nIn := FOPEN( cTextFile, 0 )     // read-only
+nIn := FOPEN( cTextFile, 0 )
 IF nIn <= 0
    RETURN .F.
 ENDIF
@@ -38,82 +39,60 @@ IF nOut <= 0
    RETURN .F.
 ENDIF
 
-cHeader := '<!DOCTYPE html>'                                      + Chr(13)+Chr(10) +;
-           '<html>'                                               + Chr(13)+Chr(10) +;
-           '<head>'                                               + Chr(13)+Chr(10) +;
-           '<meta charset="windows-1255">'                        + Chr(13)+Chr(10) +;
-           '<style>'                                              + Chr(13)+Chr(10) +;
-           'body { margin: 10px; background: #fff; }'             + Chr(13)+Chr(10) +;
-           'pre  { font-family: "Courier New", monospace;'        + Chr(13)+Chr(10) +;
-           '       font-size: 10pt; line-height: 1.2;'           + Chr(13)+Chr(10) +;
-           '       white-space: pre; margin: 0; }'                + Chr(13)+Chr(10) +;
-           '.page-break { border-top: 1px dashed #999;'          + Chr(13)+Chr(10) +;
-           '              margin: 8px 0; }'                       + Chr(13)+Chr(10) +;
-           '@media print {'                                       + Chr(13)+Chr(10) +;
-           '  .page-break { page-break-before: always;'          + Chr(13)+Chr(10) +;
-           '                border: none; margin: 0; }'          + Chr(13)+Chr(10) +;
-           '}'                                                    + Chr(13)+Chr(10) +;
-           '</style>'                                             + Chr(13)+Chr(10) +;
-           '</head>'                                              + Chr(13)+Chr(10) +;
-           '<body>'                                               + Chr(13)+Chr(10) +;
-           '<pre>'                                                + Chr(13)+Chr(10)
+cHeader := '<!DOCTYPE html>'                                      + CRLF +;
+           '<html>'                                               + CRLF +;
+           '<head>'                                               + CRLF +;
+           '<meta charset="windows-1255">'                        + CRLF +;
+           '<style>'                                              + CRLF +;
+           'body { margin: 10px; background: #fff; }'             + CRLF +;
+           'pre  { font-family: "Courier New", monospace;'        + CRLF +;
+           '       font-size: 10pt; line-height: 1.2;'           + CRLF +;
+           '       white-space: pre; margin: 0; }'                + CRLF +;
+           '.page-break { border-top: 1px dashed #999;'          + CRLF +;
+           '              margin: 8px 0; }'                       + CRLF +;
+           '@media print {'                                       + CRLF +;
+           '  .page-break { page-break-before: always;'          + CRLF +;
+           '                border: none; margin: 0; }'          + CRLF +;
+           '}'                                                    + CRLF +;
+           '</style>'                                             + CRLF +;
+           '</head>'                                              + CRLF +;
+           '<body>'                                               + CRLF +;
+           '<pre>'                                                + CRLF
 
 FWRITE( nOut, cHeader )
 
-* read entire text file
-cText := space( 65535 )
-nLen  := 0
-cLine := ""
+* read text file line by line using freadstr
+* freadstr reads up to N bytes and stops at CR/LF
 DO WHILE .T.
-   nLen := FREAD( nIn, @cText, 65535 )
-   IF nLen <= 0
+   cBuf := freadstr( nIn, 4096 )
+   IF Len( cBuf ) == 0
       EXIT
    ENDIF
-   cLine := cLine + Left( cText, nLen )
+
+   * check for form-feed in this line
+   nFF := At( Chr(12), cBuf )
+   IF nFF > 0
+      * has form-feed - write text before it, then page break
+      IF nFF > 1
+         FWRITE( nOut, HtmlEsc( Left( cBuf, nFF - 1 ) ) + CRLF )
+      ENDIF
+      FWRITE( nOut, '</pre>' + CRLF +;
+                     '<div class="page-break"></div>' + CRLF +;
+                     '<pre>' + CRLF )
+      * if there is text after the form-feed, write it too
+      IF nFF < Len( cBuf )
+         FWRITE( nOut, HtmlEsc( SubStr( cBuf, nFF + 1 ) ) + CRLF )
+      ENDIF
+   ELSE
+      * normal line
+      FWRITE( nOut, HtmlEsc( cBuf ) + CRLF )
+   ENDIF
 ENDDO
 FCLOSE( nIn )
 
-* process line by line
-nPos := 1
-DO WHILE nPos <= Len( cLine )
-
-   * check for form-feed (page break)
-   nFF := At( Chr(12), SubStr( cLine, nPos ) )
-   * check for line end
-   nCR := At( Chr(13), SubStr( cLine, nPos ) )
-
-   IF nFF > 0 .AND. ( nCR == 0 .OR. nFF < nCR )
-      * form-feed before next CR - output page break
-      IF nFF > 1
-         cOut := SubStr( cLine, nPos, nFF - 1 )
-         FWRITE( nOut, HtmlEsc( cOut ) + Chr(13)+Chr(10) )
-      ENDIF
-      FWRITE( nOut, '</pre>' + Chr(13)+Chr(10) +;
-                     '<div class="page-break"></div>' + Chr(13)+Chr(10) +;
-                     '<pre>' + Chr(13)+Chr(10) )
-      nPos := nPos + nFF
-   ELSEIF nCR > 0
-      * normal line ending with CR/LF
-      cOut := SubStr( cLine, nPos, nCR - 1 )
-      FWRITE( nOut, HtmlEsc( cOut ) + Chr(13)+Chr(10) )
-      nPos := nPos + nCR
-      * skip LF after CR
-      IF nPos <= Len( cLine ) .AND. SubStr( cLine, nPos, 1 ) == Chr(10)
-         nPos := nPos + 1
-      ENDIF
-   ELSE
-      * last line, no CR
-      cOut := SubStr( cLine, nPos )
-      IF !Empty( cOut )
-         FWRITE( nOut, HtmlEsc( cOut ) + Chr(13)+Chr(10) )
-      ENDIF
-      EXIT
-   ENDIF
-ENDDO
-
-cFooter := '</pre>'    + Chr(13)+Chr(10) +;
-           '</body>'   + Chr(13)+Chr(10) +;
-           '</html>'   + Chr(13)+Chr(10)
+cFooter := '</pre>'    + CRLF +;
+           '</body>'   + CRLF +;
+           '</html>'   + CRLF
 
 FWRITE( nOut, cFooter )
 FCLOSE( nOut )
