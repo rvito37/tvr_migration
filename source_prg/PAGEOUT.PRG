@@ -34,6 +34,14 @@ IF( rpCheckTerminate( oRP ) OR lUserFlag )
     return( NIL )
 ENDIF
 
+/* HTML output - if HtmlIsOpen() we redirect all page output to HTML
+   file and skip the normal printer/file logic
+---------------------------------------------------------------------*/
+IF HtmlIsOpen()
+   HtmlPageOut( aPage )
+   return( NIL )
+ENDIF
+
 DO CASE
 
    CASE( rpDestination( oRP ) EQ rpPRINTER )
@@ -266,6 +274,13 @@ local nPort := CASE( { upper( oRP[ rpREPORT ][ rpREPORT_OUT_PORT ] ), ;
                        "PRN" , 1, 1 } )
 
 lPCodesSent := FALSE
+
+/* HTML - close the html file before anything else
+---------------------------------------------------*/
+IF HtmlIsOpen()
+   HtmlClose()
+   return( NIL )
+ENDIF
 
 IF( rpDestination( oRP ) EQ rpPRINTER )
     rpLPrint( oRP[ rpRUNTIME ][ rpRUNTIME_CODES ][ 1 ][ 2 ], nPort )

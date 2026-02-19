@@ -7,6 +7,7 @@
 #DEFINE rpPRINTER                 1
 #DEFINE rpPRINTER_FILE            2
 #DEFINE rpDISPLAY                 3
+#DEFINE rpHTML                    4
 #DEFINE RP_SUMMARY                6
 
 STATIC cRepName
@@ -592,7 +593,18 @@ IF ::lCreateORP  //YG Shuwadah?
    rpUseFonts( oRP, .f. )
    oRP[ rpREPORT ][ rpREPORT_SHOW_COUNTER ] := .f.
 ENDIF
-rpDestination( oRP,::nDest)
+IF ::nDest == rpHTML
+   * HTML output - open HTML file, then tell engine to write to a
+   * temp file (rpPRINTER_FILE) which we will ignore. PAGEOUT.PRG
+   * checks HtmlIsOpen() and redirects output to HtmlPageOut().
+   uVar := ::cTempFileDir + GetPrintFile() + ".html"
+   HtmlOpen( Alltrim(uVar) )
+   rpDestination( oRP, rpPRINTER_FILE )
+   rpPrinter( oRP, "ASCII" )
+   rpOutFile( oRP, Alltrim( ::cTempFileDir + GetPrintFile() ) )
+ELSE
+   rpDestination( oRP,::nDest)
+ENDIF
 IF ::nDest == rpPRINTER_FILE
    uVar:= ::cTempFileDir+GetPrintFile()
    rpPrinter( oRP ,GetDefPrn() )
@@ -621,7 +633,11 @@ ENDIF
 rpGenReport( oRP )       // generate report output
 
 
-IF ::nDest == rpPRINTER_FILE
+IF ::nDest == rpHTML
+   * HTML file is closed by rpPrintReset() via HtmlClose()
+   * delete the temp text file that rpPRINTER_FILE created
+   FERASE( ::cTempFileDir + GetPrintFile() )
+ELSEIF ::nDest == rpPRINTER_FILE
    fn_fLPTCap()
 ELSEIF ::nDest == rpPRINTER
    IF ::nOldPrinter # GetUserInfo():nActivePrinter
@@ -719,6 +735,8 @@ Do Case
     nRet := rpDISPLAY
   Case ::cDevType == "File"
     nRet := rpPRINTER_FILE
+  Case ::cDevType == "HTML"
+    nRet := rpHTML
 ENDCase
 RETURN nRet
 
