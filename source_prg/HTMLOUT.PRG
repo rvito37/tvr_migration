@@ -42,7 +42,7 @@ ENDIF
 cHeader := '<!DOCTYPE html>'                                      + CRLF +;
            '<html>'                                               + CRLF +;
            '<head>'                                               + CRLF +;
-           '<meta charset="windows-1255">'                        + CRLF +;
+           '<meta charset="IBM862">'                        + CRLF +;
            '<style>'                                              + CRLF +;
            'body { margin: 10px; background: #fff; }'             + CRLF +;
            'pre  { font-family: "Courier New", monospace;'        + CRLF +;
