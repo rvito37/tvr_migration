@@ -26,8 +26,8 @@ FUNCTION TextToHtml( cTextFile, cHtmlFile )
  *
  *  Returns .T. on success, .F. on failure
  */
-LOCAL nOut
-LOCAL cText, cClean, cBuf
+LOCAL nIn, nOut, nRead
+LOCAL cText, cClean, cBuf, cChunk
 LOCAL cHeader, cFooter
 LOCAL nFF, nPos, nNext
 
@@ -36,8 +36,22 @@ IF aCP862 == NIL
    BuildCP862()
 ENDIF
 
-* read entire text file into memory
-cText := memoread( cTextFile )
+* read entire text file into memory using FREAD (not memoread which
+* stops at Chr(26) soft-EOF marker that TVR may write)
+nIn := FOPEN( cTextFile, 0 )
+IF nIn <= 0
+   RETURN .F.
+ENDIF
+cText  := ""
+cChunk := space( 4096 )
+DO WHILE .T.
+   nRead := FREAD( nIn, @cChunk, 4096 )
+   IF nRead <= 0
+      EXIT
+   ENDIF
+   cText := cText + Left( cChunk, nRead )
+ENDDO
+FCLOSE( nIn )
 IF Len( cText ) == 0
    RETURN .F.
 ENDIF
