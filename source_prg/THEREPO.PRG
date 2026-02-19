@@ -599,13 +599,6 @@ IF ::nDest == rpHTML
    rpDestination( oRP, rpPRINTER_FILE )
    rpPrinter( oRP, "ASCII" )
    rpOutFile( oRP, Alltrim( ::cTempFileDir + GetPrintFile() ) )
-ELSEIF ::nDest == rpHTML_PRINT
-   * Printer -> HTML + LPT1: generate text file with real printer (with PCL)
-   rpDestination( oRP, rpPRINTER_FILE )
-   ::nOldPrinter := GetUserInfo():nActivePrinter
-   rpPrinter( oRP, GetPrinter() )
-   rpOutFile( oRP, Alltrim( ::cTempFileDir + GetPrintFile() ) )
-   RpinitPcodes(oRP)
 ELSE
    rpDestination( oRP,::nDest)
 ENDIF
@@ -613,12 +606,16 @@ IF ::nDest == rpPRINTER_FILE
    uVar:= ::cTempFileDir+GetPrintFile()
    rpPrinter( oRP ,GetDefPrn() )
    rpOutFile( oRP, alltrim( uVar ) )
+ELSEIF ::nDest == rpPRINTER
+   ::nOldPrinter := GetUserInfo():nActivePrinter
+   rpPrinter( oRP ,GetPrinter() )
+   RpinitPcodes(oRP)
 ENDIF
 rpSwapPath( oRP ,::cTempFileDir )
 GenOpenFiles(::aDBs)
 *  added the IF...END because under some combinations the app crashes on
 *  Buffer == NIL in the called method
-IF !Empty(lSeeMessage) .OR. (!l2ndLoop  .AND. (::nDest <> rpHTML_PRINT .OR. Alert("Print Summary list?",{"Yes","No"}) == 1)) .OR. lPrintSummary
+IF !Empty(lSeeMessage) .OR. (!l2ndLoop  .AND. (::nDest <> rpPRINTER .OR. Alert("Print Summary list?",{"Yes","No"}) == 1)) .OR. lPrintSummary
    Self:AddSummary(oRP)
 END
 //fix bug for TVR(RPQC35V1,RPQC36V1 ONLY) from VR 10.04.02 id:2413541
@@ -630,38 +627,30 @@ ENDIF
 *
 * �"��� ����
 *
-IF ::nDest == rpHTML .OR. ::nDest == rpHTML_PRINT
+IF ::nDest == rpHTML
    @ 2,0 SAY Padr( " " + Chr(16) + " Generating report data...", 80 ) COLOR "W+/B"
 ENDIF
 rpGenReport( oRP )       // generate report output
 
 
-IF ::nDest == rpHTML .OR. ::nDest == rpHTML_PRINT
+IF ::nDest == rpHTML
    * TVR wrote a text file via rpPRINTER_FILE - convert it to HTML
    uVar := Alltrim( ::cTempFileDir + GetPrintFile() )
    * TextToHtml shows its own animated progress bar on row 2
    TextToHtml( uVar, uVar + ".htm" )
-   IF ::nDest == rpHTML_PRINT
-      * send raw text file (with PCL codes) to LPT1 printer
-      @ 2,0 SAY Padr( " " + Chr(16) + " Sending to printer...", 80 ) COLOR "W+/N*"
-      RUN ( "cmd /c copy /b " + Chr(34) + CurDrive() + uVar + Chr(34) + " lpt1" )
-      IF ::nOldPrinter # GetUserInfo():nActivePrinter
-         SetNewPrinter(::nOldPrinter)
-      ENDIF
-   ENDIF
    FERASE( uVar )
    * open HTML file in default browser
    uVar := CurDrive() + uVar + ".htm"
    @ 2,0 SAY Padr( " " + Chr(16) + " Opening in browser...", 80 ) COLOR "W+/N*"
    RUN ( "cmd /c start " + Chr(34)+Chr(34) + " " + Chr(34) + uVar + Chr(34) )
-   IF ::nDest == rpHTML_PRINT
-      @ 2,0 SAY Padr( " " + Chr(251) + " Printed + HTML ready!  " + GetPrintFile() + ".htm", 80 ) COLOR "W+/G"
-   ELSE
-      @ 2,0 SAY Padr( " " + Chr(251) + " HTML report ready!  " + GetPrintFile() + ".htm", 80 ) COLOR "W+/G"
-   ENDIF
+   @ 2,0 SAY Padr( " " + Chr(251) + " HTML report ready!  " + GetPrintFile() + ".htm", 80 ) COLOR "W+/G"
    INKEY(1)
 ELSEIF ::nDest == rpPRINTER_FILE
    fn_fLPTCap()
+ELSEIF ::nDest == rpPRINTER
+   IF ::nOldPrinter # GetUserInfo():nActivePrinter
+      SetNewPrinter(::nOldPrinter )
+   ENDIF
 ENDIF
 rpKillSorts( oRP )                            // kill any sort files
 rpCloseData( oRP )                          // close report databases
@@ -749,7 +738,7 @@ Method  GetDestin()
 LOCAL nRet
 Do Case
   Case ::cDevType == "Printer"
-    nRet := rpHTML_PRINT
+    nRet := rpPRINTER
   Case ::cDevType == "Screen"
     nRet := rpHTML
   Case ::cDevType == "File"
