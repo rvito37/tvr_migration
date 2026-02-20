@@ -4,19 +4,12 @@
 *.lib
 *.ppo
 
-# Database files
-*.dbf
-*.cdx
-*.ntx
-*.ndx
-*.mdx
-*.dbt
-*.fpt
+# Intermediate C files from Harbour compiler
+source_prg/*.c
 
 # Temp files
 *.tmp
 *.bak
-*.log
 
 # OS
 Thumbs.db

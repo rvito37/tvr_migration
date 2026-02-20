@@ -1,0 +1,72 @@
+=== RH2 Parser Test ===
+Parsing: C:\Users\AVXUser\BMS\RH2\RACC01V1.RH2
+
+oRP array length: 11
+
+--- REPORT SETTINGS ---
+  Report array len: 84
+  Name:        [M:\TEST\RACC01V1.RH2]
+  Page Length: 42
+  Orientation: 2
+  Margins T/L/B/R: 0/0/0/175
+  Rec Width:   80
+
+--- FIELDS (103) ---
+  001: T_ACC01     PROC_ID       C    5  expr={||T_ACC01->PROC_ID}
+  002: T_ACC01     PCPROCNO      C    4  expr={||T_ACC01->PCPROCNO}
+  003: T_ACC01     PROC_NME      C   20  expr={||T_ACC01->PROC_NME}
+  004: T_ACC01     WKSTN_ID      C    4  expr={||T_ACC01->WKSTN_ID}
+  005: T_ACC01     WKSTN_NME     C   25  expr={||T_ACC01->WKSTN_NME}
+  006: T_ACC01     PTYPE_ID      C    1  expr={||T_ACC01->PTYPE_ID}
+  007: T_ACC01     PLINE_ID      C    3  expr={||T_ACC01->PLINE_ID}
+  008: T_ACC01     B_TYPE        C    1  expr={||T_ACC01->B_TYPE}
+  009: T_ACC01     SIZE_ID       C    4  expr={||T_ACC01->SIZE_ID}
+  010: T_ACC01     PBS_QTYW      N    8  expr={||T_ACC01->PBS_QTYW}
+  011: T_ACC01     PBS_QTYS      N   10  expr={||T_ACC01->PBS_QTYS}
+  012: T_ACC01     PBS_QTYP      N   12  expr={||T_ACC01->PBS_QTYP}
+  013: T_ACC01     PBS_STDC      N   10  expr={||T_ACC01->PBS_STDC}
+  014: __TEXT__    TEXT          C    1  expr={||''}
+  015: __TEXT__    TEXT          C  128  expr={||''}
+  016: __TEXT__    TEXT          C    1  expr={||''}
+  017: __TEXT__    TEXT          C    1  expr={||''}
+  018: __TEXT__    TEXT          C    1  expr={||''}
+  019: __TEXT__    TEXT          C    1  expr={||''}
+  020: __TEXT__    TEXT          C    1  expr={||''}
+  ... (83 more)
+
+--- DATABASES (1) ---
+  1: M:\TEST\T_ACC01.DBF   alias=T_ACC01  idx=
+
+--- LINES (13) ---
+  L01: PG_HDR   lvl= 1 row=  1 fields=1
+  L02: PG_HDR   lvl= 1 row=  2 fields=6
+  L03: PG_HDR   lvl= 1 row=  3 fields=7
+  L04: PG_HDR   lvl= 1 row=  4 fields=3
+  L05: PG_HDR   lvl= 1 row=  5 fields=1
+  L06: PG_HDR   lvl= 1 row=  6 fields=21
+  L07: PG_HDR   lvl= 1 row=  7 fields=1
+  L08: BODY     lvl= 1 row=  8 fields=33
+  L09: SUMMARY  lvl= 1 row=  9 fields=1
+  L10: SUMMARY  lvl= 1 row= 10 fields=21
+  L11: SUMMARY  lvl= 1 row= 11 fields=1
+  L12: SUMMARY  lvl= 1 row= 12 fields=6
+  L13: SUMMARY  lvl= 1 row= 13 fields=1
+
+=== Parse complete! ===
+
+Now converting ALL RH2 to DBF...
+Found 209 RH2 files
+  [20/209] OK=20 Fail=0
+  [40/209] OK=40 Fail=0
+  [60/209] OK=60 Fail=0
+  [80/209] OK=80 Fail=0
+  [100/209] OK=100 Fail=0
+  [120/209] OK=120 Fail=0
+  [140/209] OK=140 Fail=0
+  [160/209] OK=160 Fail=0
+  [180/209] OK=180 Fail=0
+  [200/209] OK=200 Fail=0
+  [209/209] OK=209 Fail=0
+Conversion complete: 209 OK, 0 failed out of 209
+
+=== All done! ===
