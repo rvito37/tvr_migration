@@ -95,6 +95,8 @@
 #DEFINE RF_TOTACC   11
 #DEFINE RF_BLOCK    12
 #DEFINE RF_VAL      13
+#DEFINE RF_TOTVAL   14    // running total accumulator (like rpFIELD_TOTAL_VAL)
+#DEFINE RF_COUNTER  15    // count accumulator (like rpFIELD_TOTAL_COUNTER)
 
 /*------------------------------------------------------------------------
  * Line sub-indices (from RPT_LINE)
@@ -378,7 +380,7 @@ SELECT RPTF_LD
 DbGoTop()
 DO WHILE !Eof()
    IF AllTrim( RPTF_LD->RPT_ID ) == cRptId
-      aFld := Array( 13 )
+      aFld := Array( 15 )
       aFld[ RF_TBL ]     := AllTrim( RPTF_LD->TBL_NAME )
       aFld[ RF_NAME ]    := AllTrim( RPTF_LD->FLD_NAME )
       aFld[ RF_TYPE ]    := AllTrim( RPTF_LD->FLD_TYPE )
@@ -391,7 +393,9 @@ DO WHILE !Eof()
       aFld[ RF_TOTTYP ]  := RPTF_LD->FLD_TOTTYP
       aFld[ RF_TOTACC ]  := RPTF_LD->FLD_TOTACC
       aFld[ RF_BLOCK ]   := NIL     // compiled later
-      aFld[ RF_VAL ]     := NIL     // runtime accumulator
+      aFld[ RF_VAL ]     := NIL     // display value (like rpFIELD_VAL)
+      aFld[ RF_TOTVAL ]  := NIL     // running accumulator (like rpFIELD_TOTAL_VAL)
+      aFld[ RF_COUNTER ] := 0       // count accumulator (like rpFIELD_TOTAL_COUNTER)
       AAdd( aRptDef[ RD_FIELDS ], aFld )
    ENDIF
    DbSkip()
@@ -581,16 +585,22 @@ FOR nK := 1 TO Len( aRptDef[ RD_FIELDS ] )
 
    aFld := aRptDef[ RD_FIELDS ][ nK ]
 
-   * initialize runtime value based on type
+   * initialize runtime values based on type
+   * (matches rpLevelReset behavior: VAL, TOTAL_VAL, COUNTER all zeroed)
    IF aFld[ RF_TYPE ] == "N"
-      aFld[ RF_VAL ] := 0
+      aFld[ RF_VAL ]     := 0
+      aFld[ RF_TOTVAL ]  := 0
    ELSEIF aFld[ RF_TYPE ] == "D"
-      aFld[ RF_VAL ] := CToD("")
+      aFld[ RF_VAL ]     := CToD("")
+      aFld[ RF_TOTVAL ]  := CToD("")
    ELSEIF aFld[ RF_TYPE ] == "L"
-      aFld[ RF_VAL ] := .F.
+      aFld[ RF_VAL ]     := .F.
+      aFld[ RF_TOTVAL ]  := .F.
    ELSE
-      aFld[ RF_VAL ] := ""
+      aFld[ RF_VAL ]     := ""
+      aFld[ RF_TOTVAL ]  := ""
    ENDIF
+   aFld[ RF_COUNTER ] := 0
 
    * compile expression into code block
    cExpr := aFld[ RF_EXPR ]

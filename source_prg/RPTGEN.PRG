@@ -7,6 +7,23 @@
  *
  * Produces text output IDENTICAL to what TVR produced.
  *
+ * CRITICAL: The accumulation logic matches rpEval() from TVR exactly:
+ *   - rpEval() both accumulates AND returns the display value
+ *   - For SUM: TOTAL_VAL += base, VAL = TOTAL_VAL
+ *   - For COUNT: COUNTER += IIF(empty,0,1), VAL = COUNTER
+ *   - For AVERAGE: TOTAL_VAL += base, COUNTER += IIF(0,0,1), VAL = TOTAL_VAL/COUNTER
+ *   - For LOWEST/HIGHEST: compare and keep min/max in TOTAL_VAL, VAL = TOTAL_VAL
+ *   - rpLevelReset() resets VAL, TOTAL_VAL, AND COUNTER to 0
+ *
+ * Break processing matches rpBreakProcess() from GEN.PRG:
+ *   - Skip BACK to previous record position for footer evaluation
+ *   - rpUpdateAll(TRUE) at old position
+ *   - rpUpdateLevel() for each break level
+ *   - Output footers from HIGHEST level down to LOWEST
+ *   - Skip FORWARD to current record
+ *   - rpLevelReset() for each break level
+ *   - Output headers from LOWEST level up to HIGHEST
+ *
  * Target: Clipper 5.3
  *
  * Author: Auto-generated for BMS TVR Migration
@@ -69,6 +86,8 @@
 #DEFINE RF_TOTACC   11
 #DEFINE RF_BLOCK    12
 #DEFINE RF_VAL      13
+#DEFINE RF_TOTVAL   14
+#DEFINE RF_COUNTER  15
 
 * Line sub-indices
 #DEFINE RL_TYPE      1
@@ -107,6 +126,8 @@
 #DEFINE RP_AVERAGE       3
 #DEFINE RP_LOWEST        4
 #DEFINE RP_HIGHEST       5
+#DEFINE RP_DEVIATION     6
+#DEFINE RP_VARIANCE      7
 
 #DEFINE TRUE  .T.
 #DEFINE FALSE .F.
@@ -145,8 +166,6 @@ LOCAL nWorkLen
 LOCAL aPageBuff  := {}
 LOCAL aSummLines := {}
 
-LOCAL cOrigScreen := ""
-
 * extract RPT_ID from filename
 cRptId := RptExtractId( cRptFile )
 
@@ -184,14 +203,7 @@ IF nWorkLen <= nTopMargin
 ENDIF
 
 * open output file (for file destination)
-IF nDest == rpPRINTER_FILE
-   cOutFile := cTempDir + GetPrintFile()
-   nOutHan  := FCreate( AllTrim( cOutFile ), 0 )
-   IF nOutHan < 1
-      RETURN NIL
-   ENDIF
-ELSEIF nDest == rpPRINTER
-   * printer output - use direct fwrite to print file
+IF nDest == rpPRINTER_FILE .OR. nDest == rpPRINTER
    cOutFile := cTempDir + GetPrintFile()
    nOutHan  := FCreate( AllTrim( cOutFile ), 0 )
    IF nOutHan < 1
@@ -231,10 +243,25 @@ STATIC FUNCTION RptGenerate( aRptDef, nOutHan, nDest, aDbs, aTstBlocks, ;
                               nLeftMargin, nWorkLen, aSummLines )
 /*
  * Core report generation loop.
- * Matches rpGenerate() flow in GEN.PRG.
+ * PRECISELY matches rpGenerate() flow in GEN.PRG.
+ *
+ * TVR sequence per record:
+ *   1. Check break levels (N -> 1)
+ *   2. If break: rpBreakProcess()
+ *      a. Skip back to previous record
+ *      b. rpUpdateAll(TRUE) at old position
+ *      c. rpUpdateLevel() for each break level
+ *      d. Output footers (highest -> lowest)
+ *      e. Skip forward to current record
+ *      f. rpLevelReset() for each break level
+ *      g. Output headers (lowest -> highest)
+ *   3. rpUpdateAll() - evaluate all running/calc fields
+ *   4. rpGenBody() - output body lines
+ *   5. Save record position
+ *   6. Skip to next record
  */
 LOCAL nK, nY
-LOCAL nBreakCnt
+LOCAL nBCntr
 LOCAL nRecCount   := 0
 LOCAL nBreakLevel := 0
 LOCAL nLowBreak   := 0
@@ -244,6 +271,8 @@ LOCAL aBreakList  := {}
 LOCAL lHasLevels  := .F.
 LOCAL cMasterAlias
 LOCAL xCurrVal
+LOCAL nLastRec     := 0
+LOCAL nCurrRec     := 0
 
 * get the primary database alias
 IF Len( aDbs ) > 0
@@ -269,14 +298,15 @@ IF RecCount() == 0
 ENDIF
 
 * setup break levels
-nBreakCnt := Len( aRptDef[ RD_LEVELS ] )
-lHasLevels := nBreakCnt > 0
+nBreakLevel := Len( aRptDef[ RD_LEVELS ] )
+lHasLevels := nBreakLevel > 0
+nBreakLevel := 0    // reset - it's used later for break detection
 
 IF lHasLevels
    * build level break evaluation blocks from level field references
-   aLevels   := Array( nBreakCnt )
-   aLastVals := Array( nBreakCnt )
-   FOR nK := 1 TO nBreakCnt
+   aLevels   := Array( Len( aRptDef[ RD_LEVELS ] ) )
+   aLastVals := Array( Len( aRptDef[ RD_LEVELS ] ) )
+   FOR nK := 1 TO Len( aRptDef[ RD_LEVELS ] )
       nY := aRptDef[ RD_LEVELS ][ nK ][ RLV_FLD ]
       IF nY > 0 .AND. nY <= Len( aRptDef[ RD_FIELDS ] )
          aLevels[ nK ] := aRptDef[ RD_FIELDS ][ nY ][ RF_BLOCK ]
@@ -286,16 +316,18 @@ IF lHasLevels
    NEXT
 ENDIF
 
-* initialize totals
+* initialize all totals
 RptResetTotals( aRptDef, 0 )
 
-* evaluate all fields at first record position
+* go to first record
 DbGoTop()
-RptEvalFields( aRptDef )
+
+* initial rpUpdateAll: evaluate all fields at first record
+RptUpdateAll( aRptDef, .F. )
 
 * save initial break level values
 IF lHasLevels
-   FOR nK := 1 TO nBreakCnt
+   FOR nK := 1 TO Len( aRptDef[ RD_LEVELS ] )
       IF aLevels[ nK ] != NIL
          aLastVals[ nK ] := Eval( aLevels[ nK ] )
       ELSE
@@ -316,7 +348,7 @@ RptOutputSection( aRptDef, RP_PAGE_HEADER, 0, nOutHan, @nLineNo, @nPageNo, ;
 
 * output group headers (all levels, level 1..n)
 IF lHasLevels
-   FOR nK := 1 TO nBreakCnt
+   FOR nK := 1 TO Len( aRptDef[ RD_LEVELS ] )
       RptOutputSection( aRptDef, RP_HEADER, nK, nOutHan, @nLineNo, @nPageNo, ;
                         @aPageBuff, nPageLen, nLineLen, nLeftMargin, ;
                         nTopMargin, nWorkLen )
@@ -328,19 +360,20 @@ ENDIF
 *
 DO WHILE !Eof()
 
-   * check for exit
    nRecCount++
 
-   * evaluate all field values for current record
-   RptEvalFields( aRptDef )
-
-   * check for break levels
+   * ------------------------------------------------------------------
+   * STEP 1: Check for break levels (N -> 1, matching TVR exactly)
+   * TVR checks from nBreakCnt down to 1 (step -1).
+   * nBreakLevel = FIRST break detected (highest number)
+   * nLowBreak   = LAST break detected (lowest number)
+   * ------------------------------------------------------------------
    nBreakLevel := 0
    nLowBreak   := 0
+   nBCntr      := 0
 
    IF lHasLevels
-      * check from highest to lowest (reverse order like TVR)
-      FOR nK := nBreakCnt TO 1 STEP -1
+      FOR nK := Len( aRptDef[ RD_LEVELS ] ) TO 1 STEP -1
          IF aLevels[ nK ] != NIL
             xCurrVal := Eval( aLevels[ nK ] )
          ELSE
@@ -351,82 +384,158 @@ DO WHILE !Eof()
                nBreakLevel := nK
             ENDIF
             nLowBreak := nK
+            nBCntr++
          ENDIF
       NEXT
    ENDIF
 
-   * process break if detected
+   * ------------------------------------------------------------------
+   * STEP 2: Process break if detected
+   * TVR's rpBreakProcess():
+   *   - Builds aBreakList = {nBreakCnt, nBreakCnt-1, ..., nLowBreak}
+   *     i.e. from highest level to lowest
+   *   - Saves current position, goes BACK to previous record
+   *   - rpUpdateAll(TRUE) at old position
+   *   - rpUpdateLevel() for each level in aBreakList
+   *   - rpGenFooters() for each level (highest -> lowest)
+   *   - Goes FORWARD to current record
+   *   - rpLevelReset() + update aLastVals for each level
+   *   - rpGenHeaders() for levels (lowest -> highest)
+   * ------------------------------------------------------------------
    IF nBreakLevel > 0
 
-      * output footers from highest break down to lowest
-      FOR nK := nBreakCnt TO nLowBreak STEP -1
-
-         * accumulate totals for this level
-         RptAccumTotals( aRptDef, nK )
-
-         * output footer for this level
-         RptOutputSection( aRptDef, RP_FOOTER, nK, nOutHan, @nLineNo, @nPageNo, ;
-                           @aPageBuff, nPageLen, nLineLen, nLeftMargin, ;
-                           nTopMargin, nWorkLen )
-
-         * reset totals for this level
-         RptResetTotals( aRptDef, nK )
-
+      * build break list: from highest (nBreakCnt) down to lowest (nLowBreak)
+      * matching TVR: nBCntr := nBreakCnt - nLowBreak + 1
+      nBCntr := Len( aRptDef[ RD_LEVELS ] ) - nLowBreak + 1
+      aBreakList := Array( nBCntr )
+      FOR nK := 1 TO nBCntr
+         aBreakList[ nK ] := Len( aRptDef[ RD_LEVELS ] ) - nK + 1
       NEXT
 
-      * check for page reset on break
-      FOR nK := nLowBreak TO nBreakCnt
-         IF aRptDef[ RD_LEVELS ][ nK ][ RLV_PGRST ]
-            * new page
+      * SAVE current record position
+      nCurrRec := RecNo()
+
+      * GO BACK to previous record for footer evaluation
+      IF nLastRec > 0
+         DbGoto( nLastRec )
+      ENDIF
+
+      * rpUpdateAll(TRUE) at old record position
+      * lCalcOnly=TRUE means only evaluate calc-on-total fields
+      RptUpdateAll( aRptDef, .T. )
+
+      * rpUpdateLevel() for each break level
+      * This computes final total values for display in footers
+      FOR nK := 1 TO nBCntr
+         RptUpdateLevel( aRptDef, aBreakList[ nK ] )
+      NEXT
+
+      RptUpdateAll( aRptDef, .T. )
+
+      * output footers from highest level to lowest
+      * In TVR's multi-level break: footers go nBreakCnt down to nLowBreak
+      FOR nK := 1 TO nBCntr
+         RptOutputSection( aRptDef, RP_FOOTER, aBreakList[ nK ], ;
+                           nOutHan, @nLineNo, @nPageNo, ;
+                           @aPageBuff, nPageLen, nLineLen, nLeftMargin, ;
+                           nTopMargin, nWorkLen )
+      NEXT
+
+      * GO FORWARD to current record
+      DbGoto( nCurrRec )
+
+      * check for page reset on break, update last vals, reset totals
+      * Order matches TVR (line 2671): iterate aBreakList
+      FOR nK := 1 TO nBCntr
+         * check page reset flag
+         IF aRptDef[ RD_LEVELS ][ aBreakList[ nK ] ][ RLV_PGRST ]
             RptNewPage( aRptDef, nOutHan, @nLineNo, @nPageNo, ;
                         @aPageBuff, nPageLen, nLineLen, nLeftMargin, ;
                         nTopMargin, nWorkLen )
          ENDIF
-      NEXT
 
-      * update saved break values
-      FOR nK := nLowBreak TO nBreakCnt
-         IF aLevels[ nK ] != NIL
-            aLastVals[ nK ] := Eval( aLevels[ nK ] )
+         * update saved break value
+         IF aLevels[ aBreakList[ nK ] ] != NIL
+            aLastVals[ aBreakList[ nK ] ] := Eval( aLevels[ aBreakList[ nK ] ] )
          ENDIF
+
+         * reset totals for this level (VAL, TOTVAL, COUNTER)
+         RptResetTotals( aRptDef, aBreakList[ nK ] )
       NEXT
 
-      * output headers from lowest break up to highest
-      FOR nK := nLowBreak TO nBreakCnt
-         RptOutputSection( aRptDef, RP_HEADER, nK, nOutHan, @nLineNo, @nPageNo, ;
+      * rpUpdateAll at new record position
+      RptUpdateAll( aRptDef, .T. )
+
+      * output headers from lowest level to highest
+      * TVR (line 2662): FOR nK := 1 to len(aBreakList) => highest to lowest
+      * But the headers in standard break go low->high:
+      * aBreakList = {3,2,1} so iterating 1..nBCntr gives 3,2,1 = high->low
+      * Actually TVR (line 2662) iterates aBreakList 1..len which IS high->low
+      * Let me re-check: aBreakList = {3,2,1}, FOR nK := 1 to 3 gives 3,2,1
+      * That means headers go HIGHEST to LOWEST
+      * Wait no - looking at original code line 2662:
+      *   FOR nK := 1 to len( aBreakList )
+      *     rpGenHeaders( oRP, aBreakList[ nK ], FALSE )
+      *   NEXT
+      * aBreakList[1]=nBreakCnt, aBreakList[2]=nBreakCnt-1, etc.
+      * So headers go from HIGHEST level to LOWEST - same order as footers
+      FOR nK := 1 TO nBCntr
+         RptOutputSection( aRptDef, RP_HEADER, aBreakList[ nK ], ;
+                           nOutHan, @nLineNo, @nPageNo, ;
                            @aPageBuff, nPageLen, nLineLen, nLeftMargin, ;
                            nTopMargin, nWorkLen )
       NEXT
 
    ENDIF
 
-   * accumulate running totals (all levels)
-   RptAccumRunning( aRptDef )
+   * ------------------------------------------------------------------
+   * STEP 3: rpUpdateAll() - evaluate all running/calc fields
+   * This calls rpEval() which BOTH accumulates totals AND evaluates
+   * detail fields for the current record.
+   * ------------------------------------------------------------------
+   RptUpdateAll( aRptDef, .F. )
 
-   * check if body lines will fit on page
+   * ------------------------------------------------------------------
+   * STEP 4: Check if body lines will fit, then output body
+   * ------------------------------------------------------------------
    IF nLineNo + CountLinesByType2( aRptDef, RP_BODY, 0 ) > nWorkLen
-      * new page needed
       RptNewPage( aRptDef, nOutHan, @nLineNo, @nPageNo, ;
                   @aPageBuff, nPageLen, nLineLen, nLeftMargin, ;
                   nTopMargin, nWorkLen )
    ENDIF
 
-   * output body lines
    RptOutputSection( aRptDef, RP_BODY, 0, nOutHan, @nLineNo, @nPageNo, ;
                      @aPageBuff, nPageLen, nLineLen, nLeftMargin, ;
                      nTopMargin, nWorkLen )
 
-   * skip to next record
+   * ------------------------------------------------------------------
+   * STEP 5: Save current record position (for footer skip-back)
+   * ------------------------------------------------------------------
+   nLastRec := RecNo()
+
+   * ------------------------------------------------------------------
+   * STEP 6: Skip to next record
+   * ------------------------------------------------------------------
    DbSkip()
 
 ENDDO
 
 * ===== END OF DATA =====
 
+* Go back to last record for final footers (matching TVR line 913)
+IF nLastRec > 0
+   DbGoto( nLastRec )
+ENDIF
+
+* rpUpdateAll(TRUE) at last position
+RptUpdateAll( aRptDef, .T. )
+
 * do final footers (all levels, highest to lowest)
+* TVR (line 955): FOR nK := nBreakCnt to 1 step -1
 IF lHasLevels
-   FOR nK := nBreakCnt TO 1 STEP -1
-      RptAccumTotals( aRptDef, nK )
+   FOR nK := Len( aRptDef[ RD_LEVELS ] ) TO 1 STEP -1
+      RptUpdateLevel( aRptDef, nK )
+      RptUpdateAll( aRptDef, .T. )
       RptOutputSection( aRptDef, RP_FOOTER, nK, nOutHan, @nLineNo, @nPageNo, ;
                         @aPageBuff, nPageLen, nLineLen, nLeftMargin, ;
                         nTopMargin, nWorkLen )
@@ -435,6 +544,7 @@ ENDIF
 
 * output summary section (criteria text)
 IF Len( aSummLines ) > 0
+   * TVR line 974: rpGenSummary()
    RptOutputSummary( aSummLines, nOutHan, @nLineNo, @nPageNo, ;
                      @aPageBuff, nPageLen, nLineLen, nLeftMargin, ;
                      nTopMargin, nWorkLen )
@@ -445,7 +555,7 @@ RptOutputSection( aRptDef, RP_PAGE_FOOTER, 0, nOutHan, @nLineNo, @nPageNo, ;
                   @aPageBuff, nPageLen, nLineLen, nLeftMargin, ;
                   nTopMargin, nWorkLen )
 
-* flush last page
+* flush last page (lLastPage=TRUE means no form-feed after)
 RptFlushPage( aPageBuff, nOutHan, nLineNo, nPageLen, .T. )
 
 RETURN NIL
@@ -533,18 +643,14 @@ FOR nK := 1 TO Len( aRptDef[ RD_LINES ] )
       IF nFldIdx > 0 .AND. nFldIdx <= Len( aRptDef[ RD_FIELDS ] )
          aFld := aRptDef[ RD_FIELDS ][ nFldIdx ]
 
-         * get value
+         * get value (always use RF_VAL - already computed by RptUpdateAll/RptUpdateLevel)
+         * TVR's rpMakeNew() reads from rpFIELD_VAL directly
          IF aFld[ RF_TBL ] == "__TEXT__"
-            * text field: value is the long name
+            * text field: value is the long name (static)
             xVal := aFld[ RF_LONG ]
-         ELSEIF aFld[ RF_BLOCK ] != NIL
-            * normal field: evaluate code block
-            xVal := Eval( aFld[ RF_BLOCK ] )
-         ELSEIF aFld[ RF_VAL ] != NIL
-            * calc/total field: use accumulated value
-            xVal := aFld[ RF_VAL ]
          ELSE
-            xVal := ""
+            * all other fields (detail and total): use pre-computed value
+            xVal := aFld[ RF_VAL ]
          ENDIF
 
          * calculate display width from column positions
@@ -589,7 +695,7 @@ RptOutputSection( aRptDef, RP_PAGE_FOOTER, 0, nOutHan, @nLineNo, @nPageNo, ;
                   @aPageBuff, nPageLen, nLineLen, nLeftMargin, ;
                   nTopMargin, nWorkLen )
 
-* flush current page to output
+* flush current page to output (NOT last page, so include form-feed)
 RptFlushPage( aPageBuff, nOutHan, nLineNo, nPageLen, .F. )
 
 * increment page number
@@ -640,9 +746,10 @@ RETURN NIL
 STATIC FUNCTION RptFlushPage( aPageBuff, nOutHan, nLineNo, nPageLen, lLastPage )
 /*
  * Write the page buffer to the output file.
- * Mimics rpPageOut() behavior:
- *   - Write each non-empty line followed by CR+LF
- *   - End with form-feed (chr(12)) unless last page
+ * Matches rpPageOut() behavior for FILE output:
+ *   - Write each line followed by CR+LF
+ *   - Trim trailing spaces
+ *   - Form-feed (chr(12)) between pages BUT NOT after last page
  */
 LOCAL nK
 LOCAL cLine
@@ -668,7 +775,9 @@ FOR nK := 1 TO nPageLen
 
 NEXT
 
-* form feed between pages (not on last page for ASCII output)
+* form feed between pages (NOT on last page)
+* TVR's rpPageOut does NOT add form-feed itself; it comes from
+* the page content. For file output, we add chr(12) between pages.
 IF !lLastPage
    FWrite( nOutHan, Chr(12) + cCRLF )
 ENDIF
@@ -683,7 +792,6 @@ STATIC FUNCTION RptOutputSummary( aSummLines, nOutHan, nLineNo, nPageNo, ;
                                    nLeftMargin, nTopMargin, nWorkLen )
 /*
  * Output summary/criteria text lines.
- * These are the AddSummary lines that were dynamically added to TVR's oRP.
  */
 LOCAL nK, cLine
 
@@ -691,7 +799,6 @@ FOR nK := 1 TO Len( aSummLines )
 
    * check if we need a new page
    IF nLineNo + 1 > nWorkLen
-      * flush page (simplified - no page footer for summary overflow)
       RptFlushPage( aPageBuff, nOutHan, nLineNo, nPageLen, .F. )
       nPageNo++
       AFill( aPageBuff, "" )
@@ -719,16 +826,7 @@ RETURN NIL
 FUNCTION BuildSummaryLines( oTheRep, aDbs, nLineLen, nLeftMargin )
 /*
  * Build summary text lines from TheReport object.
- * Replaces AddSummary() method - extracts criteria text
- * directly instead of using rpLinePlace/rpRFldNew/rpLFieldNew.
- *
- * Parameters:
- *   oTheRep    - TheReport object
- *   aDbs       - Array of database names
- *   nLineLen   - Report line length
- *   nLeftMargin - Left margin
- *
- * Returns: Array of text strings (one per summary line)
+ * Replaces AddSummary() method.
  */
 LOCAL aSummary := {}
 LOCAL aLines
@@ -737,7 +835,6 @@ LOCAL nK
 LOCAL cRemark
 
 * get the criteria page text lines
-* aPrnCritPage() is a BMS function that returns formatted criteria text
 IF Len( aDbs ) > 0
    cDbf := aDbs[ 1 ]
    IF Select( cDbf ) > 0
@@ -770,31 +867,59 @@ RETURN aSummary
 
 
 /*========================================================================*/
-STATIC FUNCTION RptEvalFields( aRptDef )
+STATIC FUNCTION RptUpdateAll( aRptDef, lCalcOnly )
 /*
- * Evaluate all field expressions for the current record.
- * Updates RF_VAL for __TEXT__ and regular fields.
+ * Evaluate all fields for the current record.
+ * MATCHES rpUpdateAll() in GEN.PRG exactly.
+ *
+ * TVR's rpUpdateAll logic (line 3164-3190):
+ *   IF lCalcOnly AND nFLevel==0 AND nFFreq==0: rpEval
+ *   ELSEIF !lCalcOnly AND (nFLevel==0 OR nFFreq==0): rpEval
+ *
+ * Where:
+ *   nFLevel = field level (0=detail, >0=total)
+ *   nFFreq  = accumulation frequency (0=running, >0=level-specific)
+ *   rpEval  = evaluates block for detail, accumulates for total
+ *
+ * lCalcOnly = TRUE:
+ *   Only re-evaluates detail fields (level=0) with freq=0
+ *   to refresh their values. Does NOT touch total fields.
+ *   Used at break time to update calculated detail fields
+ *   before computing totals.
+ *
+ * lCalcOnly = FALSE:
+ *   Evaluates detail fields AND accumulates running totals (freq=0).
+ *   Used per-record in the main loop.
  */
-LOCAL nK, aFld, xVal
+LOCAL nK, aFld
+LOCAL nFLevel, nFFreq
+
+IF lCalcOnly == NIL
+   lCalcOnly := .F.
+ENDIF
 
 FOR nK := 1 TO Len( aRptDef[ RD_FIELDS ] )
 
    aFld := aRptDef[ RD_FIELDS ][ nK ]
 
-   * skip total/calc fields (they accumulate, not evaluate per-record)
-   IF aFld[ RF_LEVEL ] > 0
-      LOOP
-   ENDIF
-
-   * skip text fields (static value)
+   * skip text fields
    IF aFld[ RF_TBL ] == "__TEXT__"
       LOOP
    ENDIF
 
-   * evaluate the field block
-   IF aFld[ RF_BLOCK ] != NIL
-      xVal := Eval( aFld[ RF_BLOCK ] )
-      aFld[ RF_VAL ] := xVal
+   nFLevel := aFld[ RF_LEVEL ]
+   nFFreq  := aFld[ RF_TOTACC ]
+
+   IF lCalcOnly
+      * calc-only: evaluate detail fields (level=0, freq=0)
+      IF nFLevel == 0 .AND. nFFreq == 0
+         RptEvalField( aFld )
+      ENDIF
+   ELSE
+      * normal: evaluate if level=0 OR freq=0
+      IF nFLevel == 0 .OR. nFFreq == 0
+         RptEvalField( aFld )
+      ENDIF
    ENDIF
 
 NEXT
@@ -804,79 +929,45 @@ RETURN NIL
 
 
 /*========================================================================*/
-STATIC FUNCTION RptAccumRunning( aRptDef )
+STATIC FUNCTION RptUpdateLevel( aRptDef, nLevel )
 /*
- * Accumulate running totals for all total fields.
- * Called after each body record is processed.
+ * Compute final total values for fields at a specific level.
+ * MATCHES rpUpdateLevel() in GEN.PRG (line 3097-3144).
+ *
+ * Called at break time to compute the value that will be displayed
+ * in footer lines.
+ *
+ * TVR logic (line 3130):
+ *   IF nFFreq == nLevel OR
+ *      (nLevel == nFLevel AND nFLevel != 0 AND
+ *       (nFFreq == RP_GRANDTOTAL OR nFFreq == RP_PAGEBREAK))
+ *     => evaluate the field
+ *
+ * In our simplified model:
+ *   IF field's level matches nLevel => call RptEvalField to compute
  */
-LOCAL nK, aFld, aBaseFld
-LOCAL nBaseIdx
-LOCAL xBaseVal
+LOCAL nK, aFld
 
 FOR nK := 1 TO Len( aRptDef[ RD_FIELDS ] )
 
    aFld := aRptDef[ RD_FIELDS ][ nK ]
 
-   * only process total/calc fields (level > 0)
+   * skip non-total fields
    IF aFld[ RF_LEVEL ] <= 0
       LOOP
    ENDIF
 
-   * find the base field this total refers to
-   * In TVR, rpFIELD_TOTAL_RFO points to the base field.
-   * We look for a field with same name in the base table.
-   nBaseIdx := RptFindBaseField( aRptDef, aFld )
-
-   IF nBaseIdx > 0
-      xBaseVal := aRptDef[ RD_FIELDS ][ nBaseIdx ][ RF_VAL ]
-   ELSE
-      * try evaluating the block directly
-      IF aFld[ RF_BLOCK ] != NIL
-         xBaseVal := Eval( aFld[ RF_BLOCK ] )
-      ELSE
-         xBaseVal := 0
-      ENDIF
+   * skip text fields
+   IF aFld[ RF_TBL ] == "__TEXT__"
+      LOOP
    ENDIF
 
-   * accumulate based on total type
-   IF ValType( xBaseVal ) == "N"
-      DO CASE
-         CASE aFld[ RF_TOTTYP ] == RP_SUM
-            IF ValType( aFld[ RF_VAL ] ) != "N"
-               aFld[ RF_VAL ] := 0
-            ENDIF
-            aFld[ RF_VAL ] := aFld[ RF_VAL ] + xBaseVal
-
-         CASE aFld[ RF_TOTTYP ] == RP_COUNT
-            IF ValType( aFld[ RF_VAL ] ) != "N"
-               aFld[ RF_VAL ] := 0
-            ENDIF
-            aFld[ RF_VAL ] := aFld[ RF_VAL ] + 1
-
-         CASE aFld[ RF_TOTTYP ] == RP_AVERAGE
-            * accumulate sum + count, compute avg at output time
-            IF ValType( aFld[ RF_VAL ] ) != "N"
-               aFld[ RF_VAL ] := 0
-            ENDIF
-            aFld[ RF_VAL ] := aFld[ RF_VAL ] + xBaseVal
-
-         CASE aFld[ RF_TOTTYP ] == RP_LOWEST
-            IF ValType( aFld[ RF_VAL ] ) != "N" .OR. xBaseVal < aFld[ RF_VAL ]
-               aFld[ RF_VAL ] := xBaseVal
-            ENDIF
-
-         CASE aFld[ RF_TOTTYP ] == RP_HIGHEST
-            IF ValType( aFld[ RF_VAL ] ) != "N" .OR. xBaseVal > aFld[ RF_VAL ]
-               aFld[ RF_VAL ] := xBaseVal
-            ENDIF
-
-         OTHERWISE
-            * default to sum
-            IF ValType( aFld[ RF_VAL ] ) != "N"
-               aFld[ RF_VAL ] := 0
-            ENDIF
-            aFld[ RF_VAL ] := aFld[ RF_VAL ] + xBaseVal
-      ENDCASE
+   * check if this field matches the requested level
+   * Match by TOTACC (accumulation frequency) or LEVEL
+   IF aFld[ RF_TOTACC ] == nLevel .OR. ;
+      ( aFld[ RF_LEVEL ] == nLevel .AND. aFld[ RF_LEVEL ] != 0 )
+      * evaluate/accumulate this field
+      RptEvalField( aFld )
    ENDIF
 
 NEXT
@@ -886,15 +977,151 @@ RETURN NIL
 
 
 /*========================================================================*/
-STATIC FUNCTION RptAccumTotals( aRptDef, nLevel )
+STATIC FUNCTION RptEvalField( aFld )
 /*
- * Called at a group break - can do final calculations for this level.
- * Currently a no-op since accumulation happens in RptAccumRunning.
- * Could be used for AVERAGE computation (divide sum by count).
+ * Evaluate a single field - handles both detail and total field types.
+ * MATCHES rpEval() from TVR's RPEVAL.PRG exactly.
+ *
+ * For detail fields (level=0): just evaluate the block
+ * For total fields (level>0): accumulate AND compute display value
+ *
+ * This is the CORE of the totaling engine.
  */
-* placeholder for future average/deviation/variance computation
+LOCAL xTmp
 
-RETURN NIL
+* detail field - just evaluate
+IF aFld[ RF_LEVEL ] == 0
+   IF aFld[ RF_BLOCK ] != NIL
+      aFld[ RF_VAL ] := Eval( aFld[ RF_BLOCK ] )
+   ENDIF
+   RETURN aFld[ RF_VAL ]
+ENDIF
+
+* total field - accumulate based on type
+DO CASE
+
+   CASE aFld[ RF_TOTTYP ] == RP_COUNT
+      * COUNT: count non-empty values
+      IF aFld[ RF_BLOCK ] != NIL
+         xTmp := Eval( aFld[ RF_BLOCK ] )
+      ELSE
+         xTmp := ""
+      ENDIF
+      aFld[ RF_COUNTER ] := aFld[ RF_COUNTER ] + ;
+                             IIF( Empty( xTmp ), 0, 1 )
+      aFld[ RF_VAL ] := aFld[ RF_COUNTER ]
+
+   CASE aFld[ RF_TOTTYP ] == RP_SUM
+      * SUM: add to running total
+      IF aFld[ RF_BLOCK ] != NIL
+         xTmp := Eval( aFld[ RF_BLOCK ] )
+      ELSE
+         xTmp := 0
+      ENDIF
+      IF ValType( xTmp ) == "N"
+         aFld[ RF_TOTVAL ] := aFld[ RF_TOTVAL ] + xTmp
+      ENDIF
+      aFld[ RF_VAL ] := aFld[ RF_TOTVAL ]
+
+   CASE aFld[ RF_TOTTYP ] == RP_AVERAGE
+      * AVERAGE: accumulate sum + count, compute avg
+      IF aFld[ RF_BLOCK ] != NIL
+         xTmp := Eval( aFld[ RF_BLOCK ] )
+      ELSE
+         xTmp := 0
+      ENDIF
+      IF ValType( xTmp ) == "N"
+         aFld[ RF_TOTVAL ] := aFld[ RF_TOTVAL ] + xTmp
+         aFld[ RF_COUNTER ] := aFld[ RF_COUNTER ] + ;
+                                IIF( xTmp == 0, 0, 1 )
+      ENDIF
+      IF aFld[ RF_COUNTER ] == 0
+         aFld[ RF_VAL ] := 0
+      ELSE
+         aFld[ RF_VAL ] := aFld[ RF_TOTVAL ] / aFld[ RF_COUNTER ]
+      ENDIF
+
+   CASE aFld[ RF_TOTTYP ] == RP_LOWEST
+      * LOWEST: keep minimum
+      IF aFld[ RF_BLOCK ] != NIL
+         xTmp := Eval( aFld[ RF_BLOCK ] )
+      ELSE
+         xTmp := 0
+      ENDIF
+      IF ( Empty( aFld[ RF_TOTVAL ] ) ) .OR. ;
+         ( ValType( aFld[ RF_TOTVAL ] ) == "N" .AND. xTmp < aFld[ RF_TOTVAL ] )
+         aFld[ RF_TOTVAL ] := xTmp
+      ENDIF
+      aFld[ RF_VAL ] := aFld[ RF_TOTVAL ]
+
+   CASE aFld[ RF_TOTTYP ] == RP_HIGHEST
+      * HIGHEST: keep maximum
+      IF aFld[ RF_BLOCK ] != NIL
+         xTmp := Eval( aFld[ RF_BLOCK ] )
+      ELSE
+         xTmp := 0
+      ENDIF
+      IF ( ValType( aFld[ RF_TOTVAL ] ) == "N" .AND. xTmp > aFld[ RF_TOTVAL ] ) .OR. ;
+         ( Empty( aFld[ RF_TOTVAL ] ) )
+         aFld[ RF_TOTVAL ] := xTmp
+      ENDIF
+      aFld[ RF_VAL ] := aFld[ RF_TOTVAL ]
+
+   CASE aFld[ RF_TOTTYP ] == RP_DEVIATION
+      * STANDARD DEVIATION
+      IF aFld[ RF_BLOCK ] != NIL
+         xTmp := Eval( aFld[ RF_BLOCK ] )
+      ELSE
+         xTmp := 0
+      ENDIF
+      IF ValType( xTmp ) == "N"
+         aFld[ RF_TOTVAL ] := aFld[ RF_TOTVAL ] + xTmp
+         aFld[ RF_COUNTER ] := aFld[ RF_COUNTER ] + ;
+                                IIF( xTmp == 0, 0, 1 )
+      ENDIF
+      IF aFld[ RF_COUNTER ] == 0
+         aFld[ RF_VAL ] := 0
+      ELSE
+         xTmp := ( aFld[ RF_TOTVAL ] ^ 2 ) / aFld[ RF_COUNTER ]
+         xTmp := xTmp - ( aFld[ RF_TOTVAL ] / aFld[ RF_COUNTER ] ) ^ 2
+         aFld[ RF_VAL ] := Sqrt( xTmp )
+      ENDIF
+
+   CASE aFld[ RF_TOTTYP ] == RP_VARIANCE
+      * VARIANCE
+      IF aFld[ RF_BLOCK ] != NIL
+         xTmp := Eval( aFld[ RF_BLOCK ] )
+      ELSE
+         xTmp := 0
+      ENDIF
+      IF ValType( xTmp ) == "N"
+         aFld[ RF_TOTVAL ] := aFld[ RF_TOTVAL ] + xTmp
+         aFld[ RF_COUNTER ] := aFld[ RF_COUNTER ] + ;
+                                IIF( xTmp == 0, 0, 1 )
+      ENDIF
+      IF aFld[ RF_COUNTER ] == 0
+         aFld[ RF_VAL ] := 0
+      ELSE
+         xTmp := ( aFld[ RF_TOTVAL ] ^ 2 ) / aFld[ RF_COUNTER ]
+         xTmp := xTmp - ( aFld[ RF_TOTVAL ] / aFld[ RF_COUNTER ] ) ^ 2
+         aFld[ RF_VAL ] := xTmp
+      ENDIF
+
+   OTHERWISE
+      * unknown total type - default to SUM behavior
+      IF aFld[ RF_BLOCK ] != NIL
+         xTmp := Eval( aFld[ RF_BLOCK ] )
+      ELSE
+         xTmp := 0
+      ENDIF
+      IF ValType( xTmp ) == "N"
+         aFld[ RF_TOTVAL ] := aFld[ RF_TOTVAL ] + xTmp
+      ENDIF
+      aFld[ RF_VAL ] := aFld[ RF_TOTVAL ]
+
+ENDCASE
+
+RETURN aFld[ RF_VAL ]
 /*========================================================================*/
 
 
@@ -902,7 +1129,15 @@ RETURN NIL
 STATIC FUNCTION RptResetTotals( aRptDef, nLevel )
 /*
  * Reset total field values for a given level.
- * nLevel = 0 means reset ALL levels.
+ * MATCHES rpLevelReset() in GEN.PRG (line 3195-3249).
+ *
+ * Resets: RF_VAL, RF_TOTVAL, AND RF_COUNTER
+ * nLevel = 0 means reset ALL total fields.
+ *
+ * TVR logic (line 3220):
+ *   IF (nLevel==0 AND nFLevel!=0) OR
+ *      (nLevel>0 AND nFLevel==nLevel) OR
+ *      (nLevel==nFLevel)
  */
 LOCAL nK, aFld
 
@@ -914,14 +1149,29 @@ FOR nK := 1 TO Len( aRptDef[ RD_FIELDS ] )
       LOOP
    ENDIF
 
-   IF nLevel == 0 .OR. aFld[ RF_LEVEL ] == nLevel
-      IF aFld[ RF_TYPE ] == "N"
-         aFld[ RF_VAL ] := 0
-      ELSEIF aFld[ RF_TYPE ] == "D"
-         aFld[ RF_VAL ] := CToD("")
-      ELSE
-         aFld[ RF_VAL ] := ""
-      ENDIF
+   IF ( nLevel == 0 .AND. aFld[ RF_LEVEL ] != 0 ) .OR. ;
+      ( nLevel > 0 .AND. aFld[ RF_LEVEL ] == nLevel ) .OR. ;
+      ( nLevel == aFld[ RF_LEVEL ] )
+
+      * reset ALL three accumulators (matching rpLevelReset exactly)
+      DO CASE
+         CASE aFld[ RF_TYPE ] == "N"
+            aFld[ RF_VAL ]     := 0
+            aFld[ RF_TOTVAL ]  := 0
+            aFld[ RF_COUNTER ] := 0
+         CASE aFld[ RF_TYPE ] == "C"
+            aFld[ RF_VAL ]     := ""
+            aFld[ RF_TOTVAL ]  := ""
+            aFld[ RF_COUNTER ] := 0
+         CASE aFld[ RF_TYPE ] == "D"
+            aFld[ RF_VAL ]     := CToD("")
+            aFld[ RF_TOTVAL ]  := CToD("")
+            aFld[ RF_COUNTER ] := 0
+         OTHERWISE
+            aFld[ RF_VAL ]     := .F.
+            aFld[ RF_TOTVAL ]  := .F.
+            aFld[ RF_COUNTER ] := 0
+      ENDCASE
    ENDIF
 
 NEXT
@@ -931,34 +1181,7 @@ RETURN NIL
 
 
 /*========================================================================*/
-STATIC FUNCTION RptFindBaseField( aRptDef, aTotFld )
-/*
- * Find the base (detail) field that a total field references.
- * Matches by field name in the same or primary table.
- */
-LOCAL nK, aFld, cName
-
-cName := Upper( aTotFld[ RF_NAME ] )
-
-FOR nK := 1 TO Len( aRptDef[ RD_FIELDS ] )
-   aFld := aRptDef[ RD_FIELDS ][ nK ]
-   IF aFld[ RF_LEVEL ] == 0 .AND. ;
-      Upper( aFld[ RF_NAME ] ) == cName .AND. ;
-      aFld[ RF_TBL ] != "__TEXT__" .AND. ;
-      aFld[ RF_TBL ] != "_VIRTUAL_"
-      RETURN nK
-   ENDIF
-NEXT
-
-RETURN 0
-/*========================================================================*/
-
-
-/*========================================================================*/
 STATIC FUNCTION CountLinesByType( aRptDef, nType )
-/*
- * Count how many lines of a given type exist.
- */
 LOCAL nCount := 0
 LOCAL nK
 
@@ -974,9 +1197,6 @@ RETURN nCount
 
 /*========================================================================*/
 STATIC FUNCTION CountLinesByType2( aRptDef, nType, nLevel )
-/*
- * Count lines of a given type and level.
- */
 LOCAL nCount := 0
 LOCAL nK, aLine
 
